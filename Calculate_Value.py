@@ -61,7 +61,7 @@ def get_BC_dx_dy_dz(top_coords, top_axis):
 def output_top_axis(bottom_coords):
     top_axis_x = bottom_coords[0]
     top_axis_y = bottom_coords[1]
-    top_axis_z = 10
+    top_axis_z = bottom_coords[2] + 10
     return top_axis_x, top_axis_y, top_axis_z
 
 def find_length(AC, AB, BC):
@@ -74,7 +74,7 @@ def find_exit_vector(side_lengths):
     length_AC, length_AB, length_BC = side_lengths
     # Using the law of cosines to find the angle at point B
     from math import acos, degrees
-    angle_ABC = degrees(acos((length_AB**2 + length_BC**2 - length_AC**2) / (2 * length_AB * length_BC)))
+    angle_ABC = degrees(acos((length_AB**2 + length_AC**2 - length_BC**2) / (2 * length_AB * length_BC)))
     return angle_ABC
 
 def main():
