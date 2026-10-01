@@ -1,62 +1,109 @@
-import pyrosetta
-from pyrosetta import * 
-from pyrosetta.rosetta.core.scoring.dssp import Dssp
-import numpy as np
 import sys
-from sys import argv
-import rosetta
-import os
-import subprocess
+import numpy as np
+import pyrosetta
 
-pyrosetta.init(
-    "-crystal_refine",
-    "-cryst:refinable_lattice",
-    "-cryst:interaction_shell" ,
-    "-score_symm_complex",
-    "-mute all"
-    
-)
-# not currently using. Might in the future
-def generate_sym_file(sym_file_name):
-    if not os.path.exists(sym_file_name):
-        rosetta_path = os.environ.get("ROSETTA3", "/home/benchmark/rosetta")
-        perl_script = os.path.join(rosetta_path, "source/src/ apps/public/symmetry/make_symmdef_file.pl")
-        cmd = f"perl {perl_script} -m CRYST -p 9dp8.pdb > {sym_file_name}"
-        subprocess.run(cmd, shell=True, check=True)
-# errors with pdb being appended too many times. Starting to work though
-def find_linker_s_e(pose, linker):
-   
-    rosetta.basic.options.set_real_option("cryst:interaction_shell", 12.0)
-    updated_pose = pyrosetta.pose_from_file(pose + ".pdb")
+pyrosetta.init("-mute all")
 
-    
-    symm_mover = rosetta.protocols.symmetry.SetupForSymmetryMover(updated_pose.pdb_info().name() + ".sym")
-    symm_mover.apply(updated_pose)
+def ca_xyz(pose, i):
+    v = pose.residue(i).xyz("CA")
+    return np.array([v.x, v.y, v.z])
 
-    
-    pose_seq = updated_pose.sequence()
-    start_idx = pose_seq.find(linker)
-    if start_idx == -1:
+def find_linker(pose, linker):
+    idx = pose.sequence().find(linker)
+    if idx == -1:
         raise ValueError("Linker sequence not found in the pose")
-    start_res = start_idx + 1
-    end_res = start_res + len(linker) - 1
-    return start_res, end_res
-# code hasn't gotten this far, don't know if it works yet
-def get_exit_vector(pose, start_res, end_res):
-    coords = np.array([pose.residue(i).xyz("CA") for i in range(start_res, end_res + 1)])
-    eigenvalues, eigenvectors = np.linalg.eigh(np.dot((coords - coords.mean(axis=0)).T, coords - coords.mean(axis=0)))
+    return idx + 1, idx + len(linker)
 
-    exit_vector = eigenvectors[:,-1]
-    if np.dot(exit_vector, coords[-1] - coords[0]) < 0:
-        exit_vector = -exit_vector
-    exit_vector /= np.linalg.norm(exit_vector)
-    return exit_vector
-    
+def exit_vector(pose, start, end):
+    coords = np.array([ca_xyz(pose, i) for i in range(start, end + 1)])
+    centered = coords - coords.mean(axis=0)
+    _, vecs = np.linalg.eigh(centered.T @ centered)
+    axis = vecs[:, -1]                      # already unit length
+    if np.dot(axis, coords[-1] - coords[0]) < 0:
+        axis = -axis                        # point N -> C
+    return axis
 
+def outward_angle(pose, start, end, axis, n_base=4):
+    all_ca = np.array([ca_xyz(pose, i) for i in range(1, pose.total_residue() + 1)])
+    center = all_ca.mean(axis=0)
+    base = np.mean([ca_xyz(pose, i) for i in range(start, start + n_base)], axis=0)
+    out = base - center
+    out /= np.linalg.norm(out)
+    return np.degrees(np.arccos(np.clip(np.dot(axis, out), -1.0, 1.0)))
 
 def main():
-    start_res, end_res = find_linker_s_e(argv[1], argv[2])
-    get_exit_vector(argv[1], start_res, end_res)
+    if len(sys.argv) < 3:
+        sys.exit("Usage: python Calculate_Value.py <pose_prefix> <linker_seq>")
+    pose = pyrosetta.pose_from_file(sys.argv[1] + ".pdb")
+    start, end = find_linker(pose, sys.argv[2])
+    axis = exit_vector(pose, start, end)
+    print("Helix exit vector:", axis)
+    print(f"Angle to outward vector: {outward_angle(pose, start, end, axis):.2f}°")
 
 if __name__ == "__main__":
     main()
+
+# import sys
+# import numpy as np
+# import pyrosetta
+
+# pyrosetta.init("-mute all")
+
+# HELIX_LEN = 0   # extra residues before the linker to include in the axis fit (0 = linker only)
+
+
+# def ca_xyz(pose, i):
+#     v = pose.residue(i).xyz("CA")
+#     return np.array([v.x, v.y, v.z])
+
+
+# def find_linker(pose, linker):
+#     seq = pose.sequence()
+#     n = seq.count(linker)
+#     if n == 0:
+#         raise ValueError(f"Linker {linker} not found in pose sequence")
+#     if n > 1:
+#         print(f"WARNING: {linker} appears {n} times; using the first match")
+#     idx = seq.find(linker)
+#     start, end = idx + 1, idx + len(linker)
+#     print(f"Linker {linker}: residues {start}-{end}")
+#     return start, end
+
+
+# def exit_vector(pose, start, end):
+#     coords = np.array([ca_xyz(pose, i) for i in range(start, end + 1)])
+#     centered = coords - coords.mean(axis=0)
+#     _, vecs = np.linalg.eigh(centered.T @ centered)
+#     axis = vecs[:, -1]
+#     if np.dot(axis, coords[-1] - coords[0]) < 0:
+#         axis = -axis                         # point N -> C
+#     return axis
+
+
+# def outward_angle(pose, start, end, axis, n_base=4):
+#     all_ca = np.array([ca_xyz(pose, i) for i in range(1, pose.total_residue() + 1)])
+#     center = all_ca.mean(axis=0)
+#     n = min(n_base, end - start + 1)
+#     base = np.mean([ca_xyz(pose, i) for i in range(start, start + n)], axis=0)
+#     out = base - center
+#     out /= np.linalg.norm(out)
+#     return np.degrees(np.arccos(np.clip(np.dot(axis, out), -1.0, 1.0)))
+
+
+# def main():
+#     if len(sys.argv) < 3:
+#         sys.exit("Usage: python Calculate_Value.py <pose_prefix> <linker_seq>")
+#     pose = pyrosetta.pose_from_file(sys.argv[1] + ".pdb")
+#     link_start, link_end = find_linker(pose, sys.argv[2])
+
+#     win_start = max(1, link_start - HELIX_LEN)
+#     axis = exit_vector(pose, win_start, link_end)
+#     angle = outward_angle(pose, win_start, link_end, axis)
+
+#     print(f"Axis window: residues {win_start}-{link_end}")
+#     print("Helix exit vector:", axis)
+#     print(f"Angle to outward vector: {angle:.2f}°")
+
+
+# if __name__ == "__main__":
+#     main()
